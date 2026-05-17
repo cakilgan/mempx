@@ -10,13 +10,13 @@
 #define MEMPX_HEADER_DEFINED 1
 
 #ifdef _WIN32
-#ifdef MPX_EXPORTS
-#define MPX_API __declspec(dllexport)
+    #ifdef MPX_EXPORTS
+        #define MPX_API __declspec(dllexport)
+    #else
+        #define MPX_API __declspec(dllimport)
+    #endif
 #else
-#define MPX_API __declspec(dllimport)
-#endif
-#else
-#define MPX_API
+    #define MPX_API
 #endif
 
 namespace mpx {
@@ -34,21 +34,26 @@ namespace mpx {
 	struct use_allocator_t{};
 	inline constexpr use_allocator_t use_allocator{};
 
+	inline size align_up(size value, size align){
+		assert((align & (align - 1)) == 0);
+		return (value + align - 1) & ~(align - 1);
+	}
+
 	struct memory;
 
 	struct iallocator{
-		virtual memory allocate(size bytes)    = 0;
-		virtual void   deallocate(memory& mem) = 0;
-		virtual ~iallocator()                  = default;
+		virtual memory allocate(size bytes, size align = alignof(std::max_align_t)) = 0;
+		virtual void   deallocate(memory& mem)                                      = 0;
+		virtual ~iallocator()                                                       = default;
 	};
 
 	struct heap_allocator : public iallocator{
-		memory allocate(size bytes) override;
+		memory allocate(size bytes, size align = alignof(std::max_align_t)) override;
 		void   deallocate(memory& mem) override;
 	};
 
 	struct virtual_allocator : public iallocator{
-		memory allocate(size bytes) override;
+		memory allocate(size bytes, size align = alignof(std::max_align_t)) override;
 		void   deallocate(memory& mem) override;
 	};
 
@@ -75,7 +80,7 @@ namespace mpx {
 			 m_parent(nullptr),
 			 m_sliced(false){}
 
-		memory(void* data, size size, bool is_owner = false, type mem_type = memory::type::custom, memory* parent = nullptr,bool slice_created = false)
+		memory(void* data, size size, bool is_owner = false, type mem_type = memory::type::custom, memory* parent = nullptr, bool slice_created = false)
 			:m_ownership(is_owner ? ownership::owner : ownership::user),
 			 m_type(mem_type),
 			 m_size(size),
@@ -95,8 +100,8 @@ namespace mpx {
 			 m_timestamp(other.m_timestamp),
 			 m_parent(other.m_parent),
 			 m_sliced(other.m_sliced){
-			if(!is_owner())
-				assert(parent() && !parent()->is_invalid());			
+			if(m_sliced)
+				assert(m_parent && !m_parent->is_invalid());
 		}
 
 		memory(memory&& other)
@@ -107,36 +112,36 @@ namespace mpx {
 			 m_timestamp(other.m_timestamp),
 			 m_parent(other.m_parent),
 			 m_sliced(other.m_sliced){
-			if(!is_owner())
-				assert(parent() && !parent()->is_invalid());			
+			if(m_sliced)
+				assert(m_parent && !m_parent->is_invalid());
 			other.reset();
 		}
 
 		memory& operator=(const memory& other){
-			if(!other.is_owner() && other.m_sliced)
-				assert(other.parent() && !other.parent()->is_invalid());			
+			if(other.m_sliced)
+				assert(other.m_parent && !other.m_parent->is_invalid());
 			if(this != &other){
 				m_ownership = ownership::user;
 				m_type      = other.m_type;
 				m_size      = other.m_size;
 				m_data      = other.m_data;
 				m_timestamp = other.m_timestamp;
-				m_parent    = other.m_parent;				
+				m_parent    = other.m_parent;
 				m_sliced    = other.m_sliced;
 			}
 			return *this;
 		}
 
 		memory& operator=(memory&& other){
-			if(!other.is_owner() && other.m_sliced)
-				assert(other.parent() && !other.parent()->is_invalid());			
+			if(other.m_sliced)
+				assert(other.m_parent && !other.m_parent->is_invalid());
 			if(this != &other){
 				m_ownership = other.m_ownership;
 				m_type      = other.m_type;
 				m_size      = other.m_size;
 				m_data      = other.m_data;
 				m_timestamp = other.m_timestamp;
-				m_parent    = other.m_parent;				
+				m_parent    = other.m_parent;
 				m_sliced    = other.m_sliced;
 				other.reset();
 			}
@@ -148,12 +153,12 @@ namespace mpx {
 		bool is_heap()    const{ return m_type == type::heap_memory; }
 		bool is_custom()  const{ return m_type == type::custom; }
 		bool is_invalid() const{ return m_type == type::invalid || m_ownership == ownership::invalid; }
+		bool is_sliced()  const{ return m_sliced; }
 
 		template<typename T = u8>
 		T* at(size i){
 			assert(m_data);
-			if(!is_owner() && m_sliced)
-				assert(parent() && !parent()->is_invalid());
+			if(m_sliced) assert(m_parent && !m_parent->is_invalid());
 			return reinterpret_cast<T*>(m_data) + i;
 		}
 
@@ -164,30 +169,28 @@ namespace mpx {
 
 		const u8& operator[](size i) const{
 			assert(m_data);
-			if(!is_owner() && m_sliced)
-				assert(parent() && !parent()->is_invalid());
+			if(m_sliced) assert(m_parent && !m_parent->is_invalid());
 			return *(m_data + i);
 		}
 
-		memory* parent() const { return m_parent; }
 		void* raw(){
-			if(!is_owner() && m_sliced)
-				assert(parent() && !parent()->is_invalid());
+			if(m_sliced) assert(m_parent && !m_parent->is_invalid());
 			return m_data;
 		}
-		u8*   begin() const{
-			if(!is_owner() && m_sliced)
-				assert(parent() && !parent()->is_invalid());
+
+		u8* begin() const{
+			if(m_sliced) assert(m_parent && !m_parent->is_invalid());
 			return m_data;
 		}
-		u8*   end()   const{
-			if(!is_owner() && m_sliced)
-				assert(parent() && !parent()->is_invalid());
+
+		u8* end() const{
+			if(m_sliced) assert(m_parent && !m_parent->is_invalid());
 			return m_data ? (m_data + m_size) : nullptr;
 		}
-		size  bytes() const{ return m_size; }
 
-		time_t timestamp() const{ return m_timestamp; }
+		memory* parent()   const{ return m_parent; }
+		size    bytes()    const{ return m_size; }
+		time_t  timestamp()const{ return m_timestamp; }
 
 		void reset(){
 			m_ownership = ownership::invalid;
@@ -195,15 +198,15 @@ namespace mpx {
 			m_size      = 0;
 			m_data      = nullptr;
 			m_timestamp = 0;
+			m_parent    = nullptr;
+			m_sliced    = false;
 		}
 
 		memory slice(size offset, size length){
 			assert(m_data);
 			assert(offset + length <= m_size);
-			if(!is_owner() && m_sliced)
-				assert(parent() && !parent()->is_invalid());
-			auto mem = memory{m_data + offset,length,false,m_type,this,true};
-			return mem;
+			if(m_sliced) assert(m_parent && !m_parent->is_invalid());
+			return { m_data + offset, length, false, m_type, this, true };
 		}
 
 	private:
@@ -212,9 +215,8 @@ namespace mpx {
 		size      m_size;
 		u8*       m_data;
 		time_t    m_timestamp;
-		bool m_sliced;
-
-		memory* m_parent = nullptr;
+		memory*   m_parent;
+		bool      m_sliced;
 	};
 
 	struct arena_allocator : public iallocator{
@@ -252,10 +254,11 @@ namespace mpx {
 				m_source->deallocate(m_backing);
 		}
 
-		memory allocate(size bytes) override{
-			assert(m_offset + bytes <= m_backing.bytes());
-			memory mem = m_backing.slice(m_offset, bytes);
-			m_offset  += bytes;
+		memory allocate(size bytes, size align = alignof(std::max_align_t)) override{
+			size aligned_offset = align_up(m_offset, align);
+			assert(aligned_offset + bytes <= m_backing.bytes());
+			memory mem = m_backing.slice(aligned_offset, bytes);
+			m_offset   = aligned_offset + bytes;
 			return mem;
 		}
 
@@ -280,14 +283,14 @@ namespace mpx {
 		template<typename ...Args>
 		explicit box(Args&&... args)
 			: m_allocator(&g_heap),
-			  m_mem(m_allocator->allocate(sizeof(T))){
+			  m_mem(m_allocator->allocate(sizeof(T), alignof(T))){
 			new (m_mem.raw()) T{std::forward<Args>(args)...};
 		}
 
 		template<typename ...Args>
 		box(use_allocator_t, Allocator& alloc, Args&&... args)
 			: m_allocator(&alloc),
-			  m_mem(m_allocator->allocate(sizeof(T))){
+			  m_mem(m_allocator->allocate(sizeof(T), alignof(T))){
 			new (m_mem.raw()) T{std::forward<Args>(args)...};
 		}
 
