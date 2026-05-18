@@ -148,11 +148,11 @@ namespace mpx {
 			return *this;
 		}
 
-		bool is_owner()   const{ return m_ownership == ownership::owner; }
-		bool is_virtual() const{ return m_type == type::virtual_memory; }
-		bool is_heap()    const{ return m_type == type::heap_memory; }
-		bool is_custom()  const{ return m_type == type::custom; }
-		bool is_invalid() const{ return m_type == type::invalid || m_ownership == ownership::invalid; }
+		bool is_owner()   const{ if(m_sliced && (!m_parent || m_parent->is_invalid())){return false;} return m_ownership == ownership::owner; }
+		bool is_virtual() const{ if(m_sliced && (!m_parent || m_parent->is_invalid())){return false;} return m_type == type::virtual_memory; }
+		bool is_heap()    const{ if(m_sliced && (!m_parent || m_parent->is_invalid())){return false;} return m_type == type::heap_memory; }
+		bool is_custom()  const{ if(m_sliced && (!m_parent || m_parent->is_invalid())){return false;} return m_type == type::custom; }
+		bool is_invalid() const{ if(m_sliced && (!m_parent || m_parent->is_invalid())){return true;} return m_type == type::invalid || m_ownership == ownership::invalid; }
 		bool is_sliced()  const{ return m_sliced; }
 
 		template<typename T = u8>
@@ -220,6 +220,12 @@ namespace mpx {
 	};
 
 	struct arena_allocator : public iallocator{
+
+		arena_allocator(memory back)
+			:m_source(nullptr),
+			 m_backing(back),
+			 m_offset(0){}
+		
 		arena_allocator(iallocator& source, size bytes)
 			: m_source(&source),
 			  m_backing(source.allocate(bytes)),
@@ -356,4 +362,5 @@ namespace mpx {
 	void   free(memory& mem);
 	memory vmalloc(size bytes);
 	void   vfree(memory& mem);
+	
 }
